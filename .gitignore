@@ -4,4 +4,3 @@ cmake-build-*/
 *.uf2
 *.elf
 .DS_Store
-.make

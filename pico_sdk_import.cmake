@@ -3,7 +3,7 @@
 # This can be dropped into an external project to help locate this SDK
 # It should be include()ed prior to project()
 
-# Copyright 2021 (c) 2020 Raspberry Pi (Trading) Ltd.
+# Copyright 2020 (c) 2020 Raspberry Pi (Trading) Ltd.
 #
 # Redistribution and use in source and binary forms, with or without modification, are permitted provided that the
 # following conditions are met:
