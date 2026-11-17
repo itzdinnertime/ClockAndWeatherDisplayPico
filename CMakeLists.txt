@@ -1,4 +1,4 @@
-# Firmwares build for the Raspberry Pi Pico W.
+# Firmware build for the Raspberry Pi Pico W.
 # Host unit tests live in tests/ and are configured separately:
 #   cmake -S tests -B build-tests
 cmake_minimum_required(VERSION 3.13)
