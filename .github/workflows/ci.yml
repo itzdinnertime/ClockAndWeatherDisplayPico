@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Unit tests (GTest, host)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S tests -B build-tests -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build-tests --parallel
+
+      - name: Test
+        run: ctest --test-dir build-tests --output-on-failure
+
+  firmware:
+    name: Firmware (Pico W)
+    runs-on: ubuntu-24.04
+    env:
+      PICO_SDK_VERSION: 2.3.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib \
+            ninja-build libusb-1.0-0-dev pkg-config
+
+      - name: Cache Pico SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/pico-sdk
+          key: pico-sdk-${{ env.PICO_SDK_VERSION }}
+
+      - name: Fetch Pico SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_VERSION" https://github.com/raspberrypi/pico-sdk.git ~/pico-sdk
+          git -C ~/pico-sdk submodule update --init --depth 1 lib/cyw43-driver lib/lwip
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DPICO_SDK_PATH="$HOME/pico-sdk" -DWIFI_SSID=ci -DWIFI_PASSWORD=ci
+          cmake --build build
+
+      - name: Upload UF2
+        uses: actions/upload-artifact@v4
+        with:
+          name: time_weather_display-uf2
+          path: build/firmware/time_weather_display.uf2
