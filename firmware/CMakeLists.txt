@@ -1,9 +1,7 @@
 set(WIFI_SSID "$ENV{WIFI_SSID}" CACHE STRING "Wi-Fi network name")
 set(WIFI_PASSWORD "$ENV{WIFI_PASSWORD}" CACHE STRING "Wi-Fi password (empty for an open network)")
-if(WIFI_SSID STREQUAL "")
-    message(WARNING "WIFI_SSID is empty: the display will run offline (DS3231 time only). "
-                    "Pass -DWIFI_SSID=... -DWIFI_PASSWORD=... or set them as environment variables.")
-endif()
+# Optional: build-time credentials are only a fallback. Normally the network
+# is chosen on the device through the Wi-Fi setup portal and kept in flash.
 
 # Credentials go into a generated header inside the build tree, never into git.
 set(TW_GENERATED_DIR ${CMAKE_CURRENT_BINARY_DIR}/generated)
@@ -14,6 +12,8 @@ add_executable(time_weather_display
     drivers/hub75_panel.cpp
     net/http_client.cpp
     net/ntp_client.cpp
+    net/setup_portal.cpp
+    services/credential_store.cpp
     services/time_service.cpp
     services/weather_service.cpp
 )
@@ -37,6 +37,8 @@ target_link_libraries(time_weather_display
     hardware_i2c
     hardware_watchdog
     hardware_clocks
+    hardware_flash
+    pico_flash
 )
 
 pico_set_program_name(time_weather_display "Time & Weather Display")

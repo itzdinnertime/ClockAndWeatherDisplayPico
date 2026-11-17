@@ -1,6 +1,7 @@
 // Time & Weather LED display for the Raspberry Pi Pico W.
 //
-// Core 0: Wi-Fi supervision, NTP, DS3231, weather HTTP, hardware watchdog.
+// Core 0: Wi-Fi supervision, NTP, DS3231, weather HTTP, hardware watchdog,
+//         and the Wi-Fi setup portal.
 // Core 1: renders the screen and refreshes the HUB75 panel at 100 Hz.
 
 #include <cmath>
@@ -14,21 +15,28 @@
 #include "hardware/watchdog.h"
 #include "net/http_client.h"
 #include "net/ntp_client.h"
+#include "net/setup_portal.h"
 #include "pico/cyw43_arch.h"
 #include "pico/multicore.h"
 #include "pico/stdlib.h"
 #include "secrets.h"
+#include "services/credential_store.h"
 #include "services/shared_state.h"
 #include "services/time_service.h"
 #include "services/weather_service.h"
 #include "tw/ds3231.h"
 #include "tw/graphics.h"
+#include "tw/provisioning.h"
 #include "tw/recovery.h"
 
 namespace {
 
 SharedState g_shared;
 volatile uint32_t g_renderHeartbeat = 0;  // written by core 1 only
+
+// Watchdog scratch registers survive a watchdog_reboot(); scratch[0] carries
+// "boot into setup mode" across the restart triggered by the setup button.
+constexpr uint32_t kSetupRequestMagic = 0x53455455;  // "SETU"
 
 // ---------------------------------------------------------------- core 1 ---
 
@@ -55,6 +63,12 @@ tw::ScreenModel buildScreenModel(const SystemSnapshot& s, uint64_t monoUs) {
         m.isDay = s.weather.isDay;
         m.weatherStale = tw::isWeatherStale(s.weatherFetchedMs, monoUs / 1000, cfg::WEATHER_STALE_MS);
     }
+
+    // In setup mode, alternate instructions with the clock if we know the time.
+    if (s.setupMode) {
+        const bool instructionsPhase = (monoUs / 1000 / cfg::SETUP_SCREEN_ALTERNATE_MS) % 2 == 0;
+        m.setupMode = !m.timeValid || instructionsPhase;
+    }
     return m;
 }
 
@@ -65,6 +79,9 @@ uint8_t brightnessFor(const tw::ScreenModel& m) {
 }
 
 void core1Main() {
+    // Core 1 executes from flash, so it must be pausable while core 0 writes
+    // credentials to flash (see CredentialStore::save / flash_safe_execute).
+    multicore_lockout_victim_init();
     g_panel.init();
 
     tw::ScreenModel shown;
@@ -102,15 +119,62 @@ void initRtcBus() {
     gpio_pull_up(cfg::PIN_I2C_SCL);
 }
 
+void initSetupButton() {
+    gpio_init(cfg::PIN_SETUP_BUTTON);
+    gpio_set_dir(cfg::PIN_SETUP_BUTTON, GPIO_IN);
+    gpio_pull_up(cfg::PIN_SETUP_BUTTON);  // pressed = low
+}
+
+bool setupButtonPressed() { return !gpio_get(cfg::PIN_SETUP_BUTTON); }
+
+[[noreturn]] void rebootIntoSetupMode() {
+    std::printf("[setup] button held, restarting into setup mode\n");
+    watchdog_hw->scratch[0] = kSetupRequestMagic;
+    watchdog_reboot(0, 0, 0);
+    while (true) tight_loop_contents();
+}
+
+[[noreturn]] void runSetupMode(CredentialStore& store, TimeService& timeService, bool haveCredentials) {
+    g_shared.update([](SystemSnapshot& s) { s.setupMode = true; });
+
+    static SetupPortal portal(store);
+    portal.scanNetworks();
+    if (!portal.start()) {
+        std::printf("[setup] failed to start portal, rebooting\n");
+        watchdog_reboot(0, 0, 0);
+    }
+
+    tw::HeartbeatMonitor heartbeat(cfg::CORE1_MAX_SILENCE_MS);
+    const uint64_t giveUpAt = haveCredentials ? nowMs() + cfg::SETUP_TIMEOUT_MS : UINT64_MAX;
+
+    while (true) {
+        const uint64_t now = nowMs();
+        cyw43_arch_poll();
+        portal.tick(now);
+        timeService.tick(now, false);  // keep disciplining from the DS3231
+
+        if (now >= giveUpAt) {
+            std::printf("[setup] timed out, resuming with saved network\n");
+            watchdog_reboot(0, 0, 0);
+        }
+        if (heartbeat.shouldFeed(g_renderHeartbeat, now)) watchdog_update();
+        cyw43_arch_wait_for_work_until(make_timeout_time_ms(10));
+    }
+}
+
 }  // namespace
 
 int main() {
     stdio_init_all();
     g_shared.init();
 
-    if (watchdog_caused_reboot()) std::printf("[boot] recovered from a watchdog reset\n");
+    const bool setupRequested = watchdog_hw->scratch[0] == kSetupRequestMagic;
+    watchdog_hw->scratch[0] = 0;
+    if (watchdog_enable_caused_reboot()) std::printf("[boot] recovered from a watchdog reset\n");
+
     // From here on, a hang on either core resets the board.
     watchdog_enable(cfg::WATCHDOG_TIMEOUT_MS, true);
+    initSetupButton();
 
     // Restore time from the DS3231 before anything else so the clock is
     // correct from the first frame even with no network.
@@ -126,26 +190,40 @@ int main() {
     multicore_launch_core1(core1Main);
     watchdog_update();
 
-    const bool networkAvailable = WIFI_SSID[0] != '\0' && cyw43_arch_init() == 0;
+    // Credentials: saved via the setup portal, else the optional build-time ones.
+    static CredentialStore credentialStore;
+    std::optional<tw::WifiCredentials> credentials = credentialStore.load();
+    if (!credentials && WIFI_SSID[0] != '\0') credentials = tw::makeCredentials(WIFI_SSID, WIFI_PASSWORD);
+
+    const bool radioOk = cyw43_arch_init() == 0;
+    if (!radioOk) std::printf("[boot] CYW43 init failed; running offline\n");
+
+    if (radioOk && (setupRequested || !credentials)) {
+        runSetupMode(credentialStore, timeService, credentials.has_value());
+    }
+
+    const bool networkAvailable = radioOk && credentials.has_value();
     if (networkAvailable) {
         cyw43_arch_enable_sta_mode();
         cyw43_wifi_pm(&cyw43_state, CYW43_NONE_PM);  // lower latency, fewer silent drops
         ntp.begin();
-    } else {
-        std::printf("[boot] Wi-Fi unavailable; running offline\n");
+        std::printf("[wifi] using network \"%s\"\n", credentials->ssid);
     }
 
-    static Cyw43WifiDriver wifiDriver(WIFI_SSID, WIFI_PASSWORD);
+    static Cyw43WifiDriver wifiDriver(credentials.value_or(tw::WifiCredentials{}));
     static tw::WifiManager wifi(wifiDriver, tw::Backoff(cfg::WIFI_BACKOFF_INITIAL_MS, cfg::WIFI_BACKOFF_MAX_MS),
                                 cfg::WIFI_CONNECT_TIMEOUT_MS);
     static HttpClient http;
     static WeatherService weather(g_shared, http);
     tw::HeartbeatMonitor heartbeat(cfg::CORE1_MAX_SILENCE_MS);
+    tw::LongPressDetector setupButton(cfg::SETUP_HOLD_MS);
     bool wasOnline = false;
 
     while (true) {
         const uint64_t now = nowMs();
         bool online = false;
+
+        if (radioOk && setupButton.update(setupButtonPressed(), now)) rebootIntoSetupMode();
 
         if (networkAvailable) {
             cyw43_arch_poll();

@@ -18,6 +18,7 @@ struct SystemSnapshot {
     tw::WeatherReport weather{};
     uint64_t weatherFetchedMs = 0;
     bool wifiUp = false;
+    bool setupMode = false;
 };
 
 class SharedState {

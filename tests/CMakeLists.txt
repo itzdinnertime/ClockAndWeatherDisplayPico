@@ -26,6 +26,7 @@ add_executable(tw_tests
     test_ds3231.cpp
     test_recovery.cpp
     test_render.cpp
+    test_provisioning.cpp
 )
 target_link_libraries(tw_tests PRIVATE tw_core GTest::gtest_main)
 if(NOT MSVC)

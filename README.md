@@ -36,9 +36,13 @@ showing the local time, date and current weather. It works out where it is autom
   - The weather refreshes as soon as the connection comes back.
   - Core 0 feeds the **hardware watchdog** only while core 1's frame heartbeat keeps advancing, so a
     hang on either core resets the board.
+- **Wi-Fi setup on the device, no rebuild needed.** With no saved network, or after the setup button is
+  held for 3 s, the clock opens a `PICO-CLOCK` hotspot and runs its own DHCP and DNS servers. Most phones
+  then show the setup page automatically. Pick a network from the scanned list, enter the password, and
+  the details are saved to flash with a CRC check. Core 1 is paused safely during the write.
 - **Testable by design.** All hardware sits behind interfaces (`II2cBus`, `IRtc`, `IWifiDriver`).
-  `lib/core` has no Pico SDK dependencies and is covered by **20 GTest unit tests** that run on the host.
-  These cover parsing, time logic, rendering and recovery.
+  `lib/core` has no Pico SDK dependencies and is covered by **28 GTest unit tests** that run on the host.
+  These cover parsing, time logic, rendering, recovery and the setup portal's DHCP, DNS and HTTP handling.
 
 ## Hardware
 
@@ -48,6 +52,7 @@ showing the local time, date and current weather. It works out where it is autom
 | 64x32 HUB75 RGB matrix, 1/16 scan | P3/P4/P5 panels all work |
 | DS3231 RTC module with CR2032 | e.g. ZS-042 or the Adafruit DS3231 |
 | 5 V supply, ≥ 2 A | Powers the panel; share GND with the Pico |
+| Momentary push button | Optional; between GP15 and GND. Hold it for 3 s to re-run Wi-Fi setup |
 
 ### Wiring (edit `firmware/config.h` to change it)
 
@@ -58,34 +63,41 @@ showing the local time, date and current weather. It works out where it is autom
 | A B C D | GP6 GP7 GP8 GP9 | | VCC | 3V3 |
 | CLK | GP11 | | GND | GND |
 | LAT | GP12 | | | |
-| OE | GP13 | | | |
+| OE | GP13 | | Setup button | GP15 → GND |
 | GND | GND | | | |
 
 The data pins and the address pins must each be consecutive, and OE must be LAT + 1. The PIO
 programs depend on this.
 
+## Wi-Fi setup
+
+1. Flash the firmware and power it on. With no network saved, the panel shows
+   `WIFI SETUP / CONNECT TO / PICO-CLOCK / 192.168.4.1`.
+2. On a phone or laptop, join the open `PICO-CLOCK` network. The setup page should pop up by itself;
+   if it doesn't, browse to `http://192.168.4.1`.
+3. Choose your network (nearby ones are suggested), enter the password, and tap **Save & restart**.
+
+To change networks later, hold the GP15 button for 3 seconds. If a network is already saved, setup
+mode gives up after 10 minutes and goes back to it. The clock keeps time from the DS3231 the whole
+time, and in setup mode the screen alternates between the instructions and the clock.
+
 ## Building
 
 ### VS Code (Raspberry Pi Pico extension)
 
-Open the folder, then pass your Wi-Fi credentials. You can either set the `WIFI_SSID` and
-`WIFI_PASSWORD` environment variables before launching VS Code, or add this to `.vscode/settings.json`:
-
-```json
-"cmake.configureArgs": ["-DWIFI_SSID=MyNetwork", "-DWIFI_PASSWORD=hunter2"]
-```
-
-Then click **Compile** and hold BOOTSEL while plugging in the Pico to flash `build/firmware/time_weather_display.uf2`.
+Open the folder, click **Compile**, then hold BOOTSEL while plugging in the Pico and copy
+`build/firmware/time_weather_display.uf2` onto it.
 
 ### Command line
 
 ```sh
-cmake -S . -B build -G Ninja -DPICO_SDK_PATH=/path/to/pico-sdk -DWIFI_SSID=MyNetwork -DWIFI_PASSWORD=secret
+cmake -S . -B build -G Ninja -DPICO_SDK_PATH=/path/to/pico-sdk
 cmake --build build
 ```
 
-Credentials are written to a generated header inside `build/` and are never committed. The build
-falls back to offline (RTC-only) mode if `WIFI_SSID` is empty.
+For development you can also build credentials in with `-DWIFI_SSID=... -DWIFI_PASSWORD=...` (or
+matching environment variables). These are only a fallback when nothing is saved in flash. They go
+into a generated header inside `build/`, which is never committed.
 
 ### Unit tests (host)
 
@@ -109,12 +121,14 @@ lib/core/            Portable C++20, no SDK headers. Built for both the Pico and
   recovery           Backoff, WifiManager state machine, HeartbeatMonitor
   graphics           Framebuffer, 5x7 font, weather icons, screen layout
   hub75_pack         Framebuffer → BCM bitplanes for the PIO
+  provisioning       CRC-protected credential flash record, validation, long-press detection
+  web, captive_net   HTTP request/form parsing, setup page, DHCP and captive-DNS packets
 firmware/            Pico-only code
-  main.cpp           Core 0 network loop and core 1 render loop
+  main.cpp           Core 0 network/setup loop and core 1 render loop
   drivers/           hub75.pio, Hub75Panel, PicoI2cBus, Cyw43WifiDriver
-  net/               Async NTP (lwIP UDP) and HTTP (lwIP httpc) clients
-  services/          TimeService, WeatherService, cross-core SharedState
-tests/               20 GTest tests with fake I2C / Wi-Fi drivers
+  net/               Async NTP (lwIP UDP), HTTP client (lwIP httpc), setup portal servers
+  services/          TimeService, WeatherService, CredentialStore, cross-core SharedState
+tests/               28 GTest tests with fake I2C / Wi-Fi drivers
 ```
 
 ## Configuration

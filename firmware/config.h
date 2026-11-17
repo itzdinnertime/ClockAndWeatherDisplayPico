@@ -27,6 +27,17 @@ constexpr unsigned PIN_I2C_SDA = 20;
 constexpr unsigned PIN_I2C_SCL = 21;
 constexpr unsigned I2C_BAUD = 400'000;
 
+// ---- Wi-Fi setup portal ---------------------------------------------------
+// Momentary button between this pin and GND. Hold for SETUP_HOLD_MS to
+// restart into setup mode. (Optional: setup also starts when no credentials
+// are stored.)
+constexpr unsigned PIN_SETUP_BUTTON = 15;
+constexpr uint32_t SETUP_HOLD_MS = 3'000;
+// If credentials already exist, leave setup mode after this long unused.
+constexpr uint32_t SETUP_TIMEOUT_MS = 10 * 60 * 1000;
+// In setup mode, alternate the instructions with the clock (if time is known).
+constexpr uint32_t SETUP_SCREEN_ALTERNATE_MS = 5'000;
+
 // ---- Display --------------------------------------------------------------
 constexpr bool USE_24_HOUR = false;
 constexpr bool USE_FAHRENHEIT = true;

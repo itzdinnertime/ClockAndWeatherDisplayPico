@@ -73,6 +73,9 @@ struct ScreenModel {
 
     bool wifiConnected = false;
 
+    // Wi-Fi setup portal is running: show join instructions instead.
+    bool setupMode = false;
+
     bool operator==(const ScreenModel&) const = default;
 };
 
@@ -80,6 +83,7 @@ struct ScreenModel {
 //   y 1..14   HH:MM at 2x scale, centred (colon blinks at 1 Hz)
 //   y 16..22  "TUE NOV 17"
 //   y 24..31  weather icon, temperature, stale dot, Wi-Fi status
+// In setup mode: "WIFI SETUP" / "CONNECT TO" / <AP name> / <portal IP>.
 void renderScreen(Framebuffer& fb, const ScreenModel& m);
 
 namespace layout {

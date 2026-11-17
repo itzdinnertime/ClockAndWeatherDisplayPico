@@ -4,6 +4,7 @@
 #include "hardware/i2c.h"
 #include "pico/cyw43_arch.h"
 #include "tw/drivers.h"
+#include "tw/provisioning.h"
 
 class PicoI2cBus final : public tw::II2cBus {
 public:
@@ -24,11 +25,11 @@ private:
 
 class Cyw43WifiDriver final : public tw::IWifiDriver {
 public:
-    Cyw43WifiDriver(const char* ssid, const char* password) : ssid_(ssid), password_(password) {}
+    explicit Cyw43WifiDriver(const tw::WifiCredentials& creds) : creds_(creds) {}
 
     bool beginConnect() override {
-        const bool open = password_ == nullptr || password_[0] == '\0';
-        return cyw43_arch_wifi_connect_async(ssid_, open ? nullptr : password_,
+        const bool open = creds_.password[0] == '\0';
+        return cyw43_arch_wifi_connect_async(creds_.ssid, open ? nullptr : creds_.password,
                                              open ? CYW43_AUTH_OPEN : CYW43_AUTH_WPA2_MIXED_PSK) == 0;
     }
 
@@ -51,6 +52,5 @@ public:
     void disconnect() override { cyw43_wifi_leave(&cyw43_state, CYW43_ITF_STA); }
 
 private:
-    const char* ssid_;
-    const char* password_;
+    tw::WifiCredentials creds_;
 };

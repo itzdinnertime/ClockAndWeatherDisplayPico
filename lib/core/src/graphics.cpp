@@ -2,6 +2,8 @@
 
 #include <cstdio>
 
+#include "tw/provisioning.h"
+
 namespace tw {
 
 namespace {
@@ -166,9 +168,23 @@ int drawText(Framebuffer& fb, int x, int y, std::string_view text, Rgb color, in
     return x;
 }
 
+static void renderSetupScreen(Framebuffer& fb) {
+    const auto centred = [&](int y, std::string_view s, Rgb c) {
+        drawText(fb, (Framebuffer::kWidth - textWidth(s)) / 2, y, s, c);
+    };
+    centred(0, "WIFI SETUP", colors::kAmber);
+    centred(8, "CONNECT TO", colors::kWhite);
+    centred(16, kSetupApName, colors::kDate);
+    centred(24, "192.168.4.1", colors::kWhite);
+}
+
 void renderScreen(Framebuffer& fb, const ScreenModel& m) {
     using namespace layout;
     fb.clear();
+    if (m.setupMode) {
+        renderSetupScreen(fb);
+        return;
+    }
 
     // Time
     char hh[3], mm[3];
